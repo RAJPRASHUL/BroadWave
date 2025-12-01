@@ -4,7 +4,7 @@ function startServer(port=8000)
 {
     const wss=new Websocket.Server({port});
 
-    console.log('starting websocket server on ws//localhost:${port}');
+    console.log(`starting websocket server on ws://localhost:${port}`);
 
     wss.on('connection',(ws)=>
     {
