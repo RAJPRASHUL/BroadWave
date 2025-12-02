@@ -1,6 +1,3 @@
-#!/usr/bin/env node
-// index.js - CLI entry for broadcast-server
-
 const { startServer } = require('./server');
 const { startClient } = require('./client');
 
@@ -16,7 +13,6 @@ Examples:
 `);
 }
 
-// Parse simple --key=value options into an object
 function parseOptions(args) {
   const opts = {};
   for (const a of args) {
@@ -25,14 +21,14 @@ function parseOptions(args) {
       if (eq !== -1) {
         const key = a.slice(2, eq);
         const val = a.slice(eq + 1);
-        // convert port to number automatically
+        
         if (key === 'port') {
           opts.port = Number(val);
         } else {
           opts[key] = val;
         }
       } else {
-        // flag without value -> true
+ 
         opts[a.slice(2)] = true;
       }
     }
@@ -41,7 +37,7 @@ function parseOptions(args) {
 }
 
 function main() {
-  const argv = process.argv.slice(2); // skip node and script path
+  const argv = process.argv.slice(2); 
   if (argv.length === 0) {
     showHelp();
     process.exit(1);
