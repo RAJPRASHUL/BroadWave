@@ -1,40 +1,66 @@
-const Websocket =require('ws');
 
-function startServer(port=8000)
-{
-    const wss=new Websocket.Server({port});
+const WebSocket = require('ws');
 
-    console.log(`starting websocket server on ws://localhost:${port}`);
+function startServer(port = 8080) {
+  const wss = new WebSocket.Server({ port });
+  const clients = new Set();
 
-    wss.on('connection',(ws)=>
-    {
-        console.log('client connected');
+  console.log(`Starting WebSocket server on ws://localhost:${port}`);
+  wss.on('listening', () => {
+    console.log('Server is now listening for connections...');
+  });
 
-        ws.on('close',()=>
-        {
-            console.log('client disconnected');
-        });
+  wss.on('connection', (ws) => {
+    clients.add(ws);
+    console.log('Client connected. Total:', clients.size);
 
-        ws.on('error',(err)=>
-        {
-            console.log('Client error:',err.message);
-        });
+   
+    ws.on('message', (data) => {
+      const text = data.toString();
+      console.log(`Received message: ${text}`);
+
+
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          try {
+            client.send(text);
+          } catch (e) {
+       
+            console.error('Error sending to client:', e.message);
+          }
+        }
+      }
     });
 
-    wss.on('listening',()=>
-    {
-        console.log('server is now listening for connection');
+
+    ws.on('close', () => {
+      clients.delete(ws);
+      console.log('Client disconnected. Total:', clients.size);
     });
 
-    wss.on('error',(err)=>
-    {
-        console.log('server error',err.message);
+    ws.on('error', (err) => {
+      console.error('Client error:', err.message);
     });
+  });
+
+  wss.on('error', (err) => {
+    console.error('Server error:', err.message);
+  });
+
+
+  process.on('SIGINT', () => {
+    console.log('\nShutting down server...');
+    for (const client of clients) {
+      try { client.close(); } catch {}
+    }
+    wss.close(() => {
+      console.log('Server closed.');
+      process.exit(0);
+    });
+  });
 }
 
-module.exports={startServer};
+module.exports = { startServer };
 
-if(require.main === module)
-{
-    startServer(9000);
-}
+
+if (require.main === module) startServer(8080);

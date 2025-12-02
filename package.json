@@ -2,6 +2,9 @@
   "name": "broadwave",
   "version": "1.0.0",
   "main": "index.js",
+  "bin": {
+    "broadcast-server": "./index.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
