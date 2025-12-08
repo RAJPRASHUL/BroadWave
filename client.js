@@ -4,17 +4,16 @@ const readline = require("readline");
 readline.emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(false);
 
-
 const COLORS = [
-  "\x1b[31m", 
+  "\x1b[31m",
   "\x1b[32m",
   "\x1b[33m",
-  "\x1b[34m", 
+  "\x1b[34m",
   "\x1b[35m",
-  "\x1b[36m", 
+  "\x1b[36m",
   "\x1b[37m",
   "\x1b[95m",
-  "\x1b[94m", 
+  "\x1b[94m",
   "\x1b[92m",
 ];
 
@@ -91,18 +90,36 @@ function startClient(port = 8080, host = "localhost") {
     rl.question("Enter your username: ", (answer) => {
       myName = (answer || "").trim() || "Anonymous";
 
-
       ws.send(JSON.stringify({ type: "join", user: myName }));
 
       console.log(
-        c(`Hi ${myName}! Type messages. Type /quit to exit.`, "\x1b[37m")
+        c(
+          `Hi ${myName}! Type messages. Type /help for commands, /quit to exit.`,
+          "\x1b[37m"
+        )
       );
       rl.prompt();
 
       rl.on("line", (line) => {
         const text = line.trim();
 
-    
+        if (text === "/help") {
+          console.log("Available commands:");
+          console.log("- /help              Show this help");
+          console.log("- /users             List online users");
+          console.log("- /pm <user> <msg>   Send private message");
+          console.log("- /quit              Exit chat");
+          console.log("- (normal text)      Send public message");
+          rl.prompt();
+          return;
+        }
+
+        if (text === "/users") {
+          ws.send(JSON.stringify({ type: "users" }));
+          rl.prompt();
+          return;
+        }
+
         if (text.startsWith("/pm ")) {
           const parts = text.split(" ");
           if (parts.length < 3) {
@@ -122,14 +139,19 @@ function startClient(port = 8080, host = "localhost") {
             })
           );
 
-
           console.log(
-            formatPrivateMessage(Date.now(), myName, to, msg, myColorIndex, true)
+            formatPrivateMessage(
+              Date.now(),
+              myName,
+              to,
+              msg,
+              myColorIndex,
+              true
+            )
           );
           rl.prompt();
           return;
         }
-       
 
         if (!text) {
           rl.prompt();
@@ -142,7 +164,6 @@ function startClient(port = 8080, host = "localhost") {
           return;
         }
 
-       
         try {
           readline.moveCursor(process.stdout, 0, -1);
           readline.clearLine(process.stdout, 0);
@@ -173,7 +194,6 @@ function startClient(port = 8080, host = "localhost") {
       return;
     }
 
- 
     if (payload.type === "join_ack") {
       if (typeof payload.colorIndex === "number") {
         myColorIndex = payload.colorIndex;
@@ -195,6 +215,15 @@ function startClient(port = 8080, host = "localhost") {
 
     if (payload.type === "system") {
       console.log(c(`[System] ${payload.text}`, FG_YELLOW));
+      rl.prompt();
+      return;
+    }
+
+    if (payload.type === "users") {
+      console.log(c(`Online users (${payload.users.length}):`, FG_GRAY + DIM));
+      for (const u of payload.users) {
+        console.log(`- ${u}`);
+      }
       rl.prompt();
       return;
     }
