@@ -1,5 +1,14 @@
 const WebSocket = require("ws");
 
+function findClientByName(name, clients) {
+  for (const c of clients) {
+    if ((c.userName || "").toLowerCase() === (name || "").toLowerCase()) {
+      return c;
+    }
+  }
+  return null;
+}
+
 function startServer(port = 8080) {
   const wss = new WebSocket.Server({ port });
   const clients = new Set();
@@ -16,9 +25,8 @@ function startServer(port = 8080) {
       }
     }
     for (let i = 0; i < COLOR_COUNT; i++) {
-      if (!used.has(i)) return i;
+      if (!used.has(i)) return i; 
     }
-
     return Math.floor(Math.random() * COLOR_COUNT);
   }
 
@@ -28,6 +36,7 @@ function startServer(port = 8080) {
   wss.on("connection", (ws) => {
     ws.userName = "Anonymous";
     ws.colorIndex = 0;
+    ws.historySent = false;              
     clients.add(ws);
     console.log("Client connected. Total:", clients.size);
 
@@ -39,10 +48,27 @@ function startServer(port = 8080) {
         return;
       }
 
+      
       if (payload.type === "join") {
         ws.userName = (payload.user || "Anonymous").toString().trim();
         ws.colorIndex = getUniqueColorIndex();
 
+        console.log(
+          `User joined: ${ws.userName} (colorIndex=${ws.colorIndex})`
+        );
+
+        
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "join_ack",
+              user: ws.userName,
+              colorIndex: ws.colorIndex,
+            })
+          );
+        } catch (e) {}
+
+        
         if (!ws.historySent) {
           try {
             ws.send(
@@ -52,6 +78,7 @@ function startServer(port = 8080) {
           ws.historySent = true;
         }
 
+     
         try {
           ws.send(
             JSON.stringify({
@@ -64,6 +91,7 @@ function startServer(port = 8080) {
         return;
       }
 
+      
       if (payload.type === "message") {
         const text = (payload.text || "").toString();
         const msg = {
@@ -74,11 +102,13 @@ function startServer(port = 8080) {
           colorIndex: ws.colorIndex || 0,
         };
 
+      
         messageHistory.push(msg);
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
 
         const packet = JSON.stringify(msg);
 
+       
         for (const client of clients) {
           if (client.readyState === WebSocket.OPEN && client !== ws) {
             try {
@@ -93,6 +123,41 @@ function startServer(port = 8080) {
         return;
       }
 
+
+      if (payload.type === "private") {
+        const target = findClientByName(payload.to, clients);
+        if (!target || target.readyState !== WebSocket.OPEN) {
+          try {
+            ws.send(
+              JSON.stringify({
+                type: "system",
+                text: `User "${payload.to}" not online`,
+              })
+            );
+          } catch (e) {}
+          return;
+        }
+
+        const pm = {
+          type: "private",
+          from: ws.userName || "Anonymous",
+          to: target.userName,
+          text: (payload.text || "").toString(),
+          time: Date.now(),
+          colorIndex: ws.colorIndex || 0,
+        };
+
+        try {
+          target.send(JSON.stringify(pm));
+        } catch (e) {
+          console.error("PM send error", e.message);
+        }
+
+        console.log(`PM ${pm.from} -> ${pm.to}: ${pm.text}`);
+        return;
+      }
+
+    
       if (payload.type === "typing" || payload.type === "stop_typing") {
         const packet = JSON.stringify({
           type: payload.type,
@@ -121,10 +186,11 @@ function startServer(port = 8080) {
 
   process.on("SIGINT", () => {
     console.log("\nShutting down server...");
-    for (const client of clients)
+    for (const client of clients) {
       try {
         client.close();
       } catch {}
+    }
     wss.close(() => {
       console.log("Server closed.");
       process.exit(0);
