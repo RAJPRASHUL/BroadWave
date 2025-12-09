@@ -1,20 +1,22 @@
+// client.js
 const WebSocket = require("ws");
 const readline = require("readline");
 
 readline.emitKeypressEvents(process.stdin);
-if (process.stdin.isTTY) process.stdin.setRawMode(false);
+if (process.stdin.isTTY) process.stdin.setRawMode(true); // needed for keypress
 
+// ANSI colors (must match server COLOR_COUNT = 10)
 const COLORS = [
-  "\x1b[31m",
-  "\x1b[32m",
-  "\x1b[33m",
-  "\x1b[34m",
-  "\x1b[35m",
-  "\x1b[36m",
-  "\x1b[37m",
-  "\x1b[95m",
-  "\x1b[94m",
-  "\x1b[92m",
+  "\x1b[31m", // red
+  "\x1b[32m", // green
+  "\x1b[33m", // yellow
+  "\x1b[34m", // blue
+  "\x1b[35m", // magenta
+  "\x1b[36m", // cyan
+  "\x1b[37m", // white
+  "\x1b[95m", // bright magenta
+  "\x1b[94m", // bright blue
+  "\x1b[92m", // bright green
 ];
 
 const RESET = "\x1b[0m";
@@ -77,14 +79,78 @@ function startClient(port = 8080, host = "localhost") {
   console.log(`Connecting to server at ${url} ...`);
 
   const ws = new WebSocket(url);
+
+  let currentRoom = "lobby";
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "> ",
+    prompt: `[${currentRoom}] > `,
   });
 
   let myName = "Anonymous";
-  let myColorIndex = 0;
+  let myColorIndex = 0; // will be set from join_ack
+
+  // --- typing state (me -> server) ---
+  let iAmTyping = false;
+  let typingTimeout = null;
+
+  function sendTyping() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (iAmTyping) return;
+    iAmTyping = true;
+    ws.send(JSON.stringify({ type: "typing" }));
+  }
+
+  function sendStopTyping() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!iAmTyping) return;
+    iAmTyping = false;
+    ws.send(JSON.stringify({ type: "stop_typing" }));
+  }
+
+  function resetTypingTimeout() {
+    if (typingTimeout) clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+      sendStopTyping();
+    }, 1500); // 1.5s of inactivity
+  }
+
+  // --- typing state (others -> display) ---
+  const typingUsers = new Set();
+  let typingLineVisible = false;
+
+  function clearTypingLine() {
+    if (!typingLineVisible) return;
+    try {
+      readline.moveCursor(process.stdout, 0, -1);
+      readline.clearLine(process.stdout, 0);
+      readline.cursorTo(process.stdout, 0);
+    } catch {}
+    typingLineVisible = false;
+  }
+
+  function renderTypingLine() {
+    clearTypingLine();
+
+    if (typingUsers.size === 0) {
+      rl.prompt(true);
+      return;
+    }
+
+    const names = Array.from(typingUsers);
+    const msg =
+      names.length === 1
+        ? `${names[0]} is typing...`
+        : `${names.join(", ")} are typing...`;
+
+    console.log(c(msg, FG_GRAY + DIM));
+    typingLineVisible = true;
+    rl.prompt(true);
+  }
+
+  function updatePrompt() {
+    rl.setPrompt(`[${currentRoom}] > `);
+  }
 
   ws.on("open", () => {
     rl.question("Enter your username: ", (answer) => {
@@ -94,32 +160,38 @@ function startClient(port = 8080, host = "localhost") {
 
       console.log(
         c(
-          `Hi ${myName}! Type messages. Type /help for commands, /quit to exit.`,
+          `Hi ${myName}! Type messages. Commands: /pm, /nick, /join, /quit`,
           "\x1b[37m"
         )
       );
+      updatePrompt();
       rl.prompt();
+
+      // keypress listener (after username)
+      const onKeypress = (str, key) => {
+        if (key && key.ctrl && key.name === "c") return;
+
+        // Enter -> line submitted, stop typing
+        if (key && key.name === "return") {
+          sendStopTyping();
+          if (typingTimeout) clearTimeout(typingTimeout);
+          return;
+        }
+
+        // Any other key
+        sendTyping();
+        resetTypingTimeout();
+      };
+
+      process.stdin.on("keypress", onKeypress);
 
       rl.on("line", (line) => {
         const text = line.trim();
 
-        if (text === "/help") {
-          console.log("Available commands:");
-          console.log("- /help              Show this help");
-          console.log("- /users             List online users");
-          console.log("- /pm <user> <msg>   Send private message");
-          console.log("- /quit              Exit chat");
-          console.log("- (normal text)      Send public message");
-          rl.prompt();
-          return;
-        }
+        sendStopTyping();
+        if (typingTimeout) clearTimeout(typingTimeout);
 
-        if (text === "/users") {
-          ws.send(JSON.stringify({ type: "users" }));
-          rl.prompt();
-          return;
-        }
-
+        // ----- /pm -----
         if (text.startsWith("/pm ")) {
           const parts = text.split(" ");
           if (parts.length < 3) {
@@ -140,15 +212,53 @@ function startClient(port = 8080, host = "localhost") {
           );
 
           console.log(
-            formatPrivateMessage(
-              Date.now(),
-              myName,
-              to,
-              msg,
-              myColorIndex,
-              true
-            )
+            formatPrivateMessage(Date.now(), myName, to, msg, myColorIndex, true)
           );
+          rl.prompt();
+          return;
+        }
+
+        // ----- /nick -----
+        if (text.startsWith("/nick ")) {
+          const newName = text.replace("/nick", "").trim();
+
+          if (!newName) {
+            console.log("Usage: /nick NewName");
+            rl.prompt();
+            return;
+          }
+
+          ws.send(
+            JSON.stringify({
+              type: "message",
+              text,
+            })
+          );
+
+          myName = newName;
+          rl.prompt();
+          return;
+        }
+
+        // ----- /join -----
+        if (text.startsWith("/join ")) {
+          const newRoom = text.replace("/join", "").trim();
+
+          if (!newRoom) {
+            console.log("Usage: /join roomName");
+            rl.prompt();
+            return;
+          }
+
+          ws.send(
+            JSON.stringify({
+              type: "join_room",
+              room: newRoom,
+            })
+          );
+
+          currentRoom = newRoom;
+          updatePrompt();
           rl.prompt();
           return;
         }
@@ -159,20 +269,21 @@ function startClient(port = 8080, host = "localhost") {
         }
 
         if (text === "/quit") {
+          process.stdin.removeAllListeners("keypress");
           rl.close();
           ws.close();
           return;
         }
 
+        // clear typed line before printing own formatted message
         try {
           readline.moveCursor(process.stdout, 0, -1);
           readline.clearLine(process.stdout, 0);
           readline.cursorTo(process.stdout, 0);
-        } catch (e) {}
+        } catch {}
 
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "message", text }));
-
           console.log(
             formatIncomingMessage(Date.now(), myName, text, myColorIndex, true)
           );
@@ -188,7 +299,7 @@ function startClient(port = 8080, host = "localhost") {
     let payload;
     try {
       payload = JSON.parse(data.toString());
-    } catch (e) {
+    } catch {
       console.log(c(`[Raw] ${data.toString()}`, FG_YELLOW));
       rl.prompt();
       return;
@@ -214,17 +325,9 @@ function startClient(port = 8080, host = "localhost") {
     }
 
     if (payload.type === "system") {
+      clearTypingLine();
       console.log(c(`[System] ${payload.text}`, FG_YELLOW));
-      rl.prompt();
-      return;
-    }
-
-    if (payload.type === "users") {
-      console.log(c(`Online users (${payload.users.length}):`, FG_GRAY + DIM));
-      for (const u of payload.users) {
-        console.log(`- ${u}`);
-      }
-      rl.prompt();
+      renderTypingLine();
       return;
     }
 
@@ -232,6 +335,8 @@ function startClient(port = 8080, host = "localhost") {
       const isMe = payload.user === myName;
       const ci =
         typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
+
+      clearTypingLine();
       console.log(
         formatIncomingMessage(
           payload.time,
@@ -241,13 +346,15 @@ function startClient(port = 8080, host = "localhost") {
           isMe
         )
       );
-      rl.prompt();
+      renderTypingLine();
       return;
     }
 
     if (payload.type === "private") {
       const ci =
         typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
+
+      clearTypingLine();
       console.log(
         formatPrivateMessage(
           payload.time,
@@ -258,7 +365,24 @@ function startClient(port = 8080, host = "localhost") {
           false
         )
       );
-      rl.prompt();
+      renderTypingLine();
+      return;
+    }
+
+    // typing events from others (room-scoped by server)
+    if (payload.type === "typing") {
+      if (payload.user && payload.user !== myName) {
+        typingUsers.add(payload.user);
+        renderTypingLine();
+      }
+      return;
+    }
+
+    if (payload.type === "stop_typing") {
+      if (payload.user && typingUsers.has(payload.user)) {
+        typingUsers.delete(payload.user);
+        renderTypingLine();
+      }
       return;
     }
 

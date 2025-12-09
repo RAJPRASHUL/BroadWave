@@ -1,3 +1,4 @@
+// server.js
 const WebSocket = require("ws");
 
 function findClientByName(name, clients) {
@@ -10,13 +11,58 @@ function findClientByName(name, clients) {
   return null;
 }
 
+function isNameTaken(name, clients) {
+  const target = (name || "").toLowerCase();
+  for (const c of clients) {
+    if ((c.userName || "").toLowerCase() === target) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function startServer(port = 8080) {
   const wss = new WebSocket.Server({ port });
+
   const clients = new Set();
-  const messageHistory = [];
+
+  // rooms: roomName -> Set<WebSocket>
+  const rooms = new Map();
+  // histories: roomName -> [messages...]
+  const roomHistories = new Map();
   const MAX_HISTORY = 50;
 
   const COLOR_COUNT = 10;
+
+  function ensureRoom(name) {
+    const roomName = name || "lobby";
+    if (!rooms.has(roomName)) {
+      rooms.set(roomName, new Set());
+    }
+    return rooms.get(roomName);
+  }
+
+  function getRoomHistory(name) {
+    const roomName = name || "lobby";
+    if (!roomHistories.has(roomName)) {
+      roomHistories.set(roomName, []);
+    }
+    return roomHistories.get(roomName);
+  }
+
+  function broadcastToRoom(roomName, packet, excludeWs = null) {
+    const room = rooms.get(roomName);
+    if (!room) return;
+    for (const client of room) {
+      if (client.readyState === WebSocket.OPEN && client !== excludeWs) {
+        try {
+          client.send(packet);
+        } catch (e) {
+          console.error("Broadcast error:", e.message);
+        }
+      }
+    }
+  }
 
   function getUniqueColorIndex() {
     const used = new Set();
@@ -31,32 +77,102 @@ function startServer(port = 8080) {
     return Math.floor(Math.random() * COLOR_COUNT);
   }
 
+  function switchRoom(ws, newRoomRaw) {
+    const oldRoom = ws.roomName || "lobby";
+    const newRoom = (newRoomRaw || "lobby").trim() || "lobby";
+
+    if (oldRoom === newRoom) {
+      // already there
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "system",
+            text: `You are already in room "${newRoom}".`,
+          })
+        );
+      } catch {}
+      return;
+    }
+
+    // remove from old room
+    const oldSet = rooms.get(oldRoom);
+    if (oldSet) {
+      oldSet.delete(ws);
+    }
+
+    // add to new room
+    const newSet = ensureRoom(newRoom);
+    newSet.add(ws);
+    ws.roomName = newRoom;
+
+    // notify self
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "system",
+          text: `You joined room "${newRoom}".`,
+        })
+      );
+    } catch {}
+
+    // send new room history
+    const history = getRoomHistory(newRoom);
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "history",
+          messages: history,
+        })
+      );
+    } catch {}
+
+    // notify others
+    const leftPacket = JSON.stringify({
+      type: "system",
+      text: `${ws.userName} left room "${oldRoom}".`,
+    });
+    const joinPacket = JSON.stringify({
+      type: "system",
+      text: `${ws.userName} joined room "${newRoom}".`,
+    });
+
+    broadcastToRoom(oldRoom, leftPacket, ws);
+    broadcastToRoom(newRoom, joinPacket, ws);
+
+    console.log(`${ws.userName} moved ${oldRoom} -> ${newRoom}`);
+  }
+
   console.log(`Starting WebSocket server on ws://localhost:${port}`);
   wss.on("listening", () => console.log("Server is listening..."));
 
   wss.on("connection", (ws) => {
     ws.userName = "Anonymous";
     ws.colorIndex = 0;
-    ws.historySent = false;
+    ws.roomName = "lobby"; // default room
+
     clients.add(ws);
+    ensureRoom("lobby").add(ws);
+
     console.log("Client connected. Total:", clients.size);
 
     ws.on("message", (data) => {
       let payload;
       try {
         payload = JSON.parse(data.toString());
-      } catch (e) {
+      } catch {
         return;
       }
 
+      // -------- JOIN (initial handshake) --------
       if (payload.type === "join") {
         ws.userName = (payload.user || "Anonymous").toString().trim();
         ws.colorIndex = getUniqueColorIndex();
 
         console.log(
-          `User joined: ${ws.userName} (colorIndex=${ws.colorIndex})`
+          `User joined: ${ws.userName} (colorIndex=${ws.colorIndex}, room=${ws.roomName})`
         );
 
+        // send color info
         try {
           ws.send(
             JSON.stringify({
@@ -65,34 +181,64 @@ function startServer(port = 8080) {
               colorIndex: ws.colorIndex,
             })
           );
-        } catch (e) {}
+        } catch {}
 
-        if (!ws.historySent) {
-          try {
-            ws.send(
-              JSON.stringify({ type: "history", messages: messageHistory })
-            );
-          } catch (e) {}
-          ws.historySent = true;
-        }
+        // send history of current room (lobby at start)
+        const history = getRoomHistory(ws.roomName);
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "history",
+              messages: history,
+            })
+          );
+        } catch {}
 
+        // welcome message (to this user only)
         try {
           ws.send(
             JSON.stringify({
               type: "system",
-              text: `Welcome, ${ws.userName}! You are connected.`,
+              text: `Welcome, ${ws.userName}! You are in room "${ws.roomName}".`,
             })
           );
-        } catch (e) {}
+        } catch {}
+
+        // notify others in room
+        const joinPacket = JSON.stringify({
+          type: "system",
+          text: `${ws.userName} joined room "${ws.roomName}".`,
+        });
+        broadcastToRoom(ws.roomName, joinPacket, ws);
 
         return;
       }
 
+      // -------- JOIN ROOM (via /join room) --------
+      if (payload.type === "join_room") {
+        const room = (payload.room || "").toString().trim();
+        if (!room) {
+          try {
+            ws.send(
+              JSON.stringify({
+                type: "system",
+                text: "Usage: /join roomName",
+              })
+            );
+          } catch {}
+          return;
+        }
+        switchRoom(ws, room);
+        return;
+      }
+
+      // -------- LIST USERS (in current room) --------
       if (payload.type === "users") {
         const userList = [];
-        for (const client of clients) {
-          if (client.userName) {
-            userList.push(client.userName);
+        const roomSet = rooms.get(ws.roomName || "lobby");
+        if (roomSet) {
+          for (const client of roomSet) {
+            if (client.userName) userList.push(client.userName);
           }
         }
 
@@ -103,40 +249,83 @@ function startServer(port = 8080) {
               users: userList,
             })
           );
-        } catch (e) {}
+        } catch {}
 
         return;
       }
 
+      // -------- PUBLIC MESSAGE (also handles /nick) --------
       if (payload.type === "message") {
-        const text = (payload.text || "").toString();
+        const text = (payload.text || "").toString().trim();
+
+        // /nick command
+        if (text.startsWith("/nick ")) {
+          const newName = text.replace("/nick", "").trim();
+
+          if (!newName) {
+            try {
+              ws.send(
+                JSON.stringify({
+                  type: "system",
+                  text: "Usage: /nick NewName",
+                })
+              );
+            } catch {}
+            return;
+          }
+
+          if (isNameTaken(newName, clients)) {
+            try {
+              ws.send(
+                JSON.stringify({
+                  type: "system",
+                  text: `Username "${newName}" is already taken.`,
+                })
+              );
+            } catch {}
+            return;
+          }
+
+          const oldName = ws.userName;
+          ws.userName = newName;
+
+          const systemMsg = {
+            type: "system",
+            text: `${oldName} changed name to ${newName}`,
+          };
+          const packet = JSON.stringify(systemMsg);
+
+          // broadcast to the room
+          broadcastToRoom(ws.roomName || "lobby", packet);
+
+          console.log(`${oldName} -> ${newName}`);
+          return;
+        }
+
+        // normal chat message (room-scoped)
+        const roomName = ws.roomName || "lobby";
         const msg = {
           type: "message",
           user: ws.userName || "Anonymous",
           text,
           time: Date.now(),
           colorIndex: ws.colorIndex || 0,
+          room: roomName,
         };
 
-        messageHistory.push(msg);
-        if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+        const history = getRoomHistory(roomName);
+        history.push(msg);
+        if (history.length > MAX_HISTORY) history.shift();
 
         const packet = JSON.stringify(msg);
 
-        for (const client of clients) {
-          if (client.readyState === WebSocket.OPEN && client !== ws) {
-            try {
-              client.send(packet);
-            } catch (err) {
-              console.error("Send error", err.message);
-            }
-          }
-        }
+        broadcastToRoom(roomName, packet, ws);
 
-        console.log(`[${msg.user}] ${msg.text}`);
+        console.log(`[${roomName}] [${msg.user}] ${msg.text}`);
         return;
       }
 
+      // -------- PRIVATE MESSAGE (cross-room) --------
       if (payload.type === "private") {
         const target = findClientByName(payload.to, clients);
         if (!target || target.readyState !== WebSocket.OPEN) {
@@ -147,7 +336,7 @@ function startServer(port = 8080) {
                 text: `User "${payload.to}" not online`,
               })
             );
-          } catch (e) {}
+          } catch {}
           return;
         }
 
@@ -166,27 +355,32 @@ function startServer(port = 8080) {
           console.error("PM send error", e.message);
         }
 
-        console.log(`PM ${pm.from} -> ${pm.to}: ${pm.text}`);
+        console.log(
+          `PM ${pm.from} -> ${pm.to} (rooms ${ws.roomName} -> ${target.roomName}): ${pm.text}`
+        );
         return;
       }
 
+      // -------- TYPING / STOP_TYPING (room-scoped) --------
       if (payload.type === "typing" || payload.type === "stop_typing") {
+        const roomName = ws.roomName || "lobby";
+
         const packet = JSON.stringify({
           type: payload.type,
           user: ws.userName || "Anonymous",
+          room: roomName,
         });
-        for (const client of clients) {
-          if (client.readyState === WebSocket.OPEN && client !== ws) {
-            try {
-              client.send(packet);
-            } catch (e) {}
-          }
-        }
+
+        broadcastToRoom(roomName, packet, ws);
         return;
       }
     });
 
     ws.on("close", () => {
+      const roomName = ws.roomName || "lobby";
+      const roomSet = rooms.get(roomName);
+      if (roomSet) roomSet.delete(ws);
+
       clients.delete(ws);
       console.log("Client disconnected. Total:", clients.size);
     });
