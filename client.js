@@ -1,22 +1,21 @@
-// client.js
 const WebSocket = require("ws");
 const readline = require("readline");
 
 readline.emitKeypressEvents(process.stdin);
-if (process.stdin.isTTY) process.stdin.setRawMode(true); // needed for keypress
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
 
-// ANSI colors (must match server COLOR_COUNT = 10)
+
 const COLORS = [
-  "\x1b[31m", // red
-  "\x1b[32m", // green
-  "\x1b[33m", // yellow
-  "\x1b[34m", // blue
-  "\x1b[35m", // magenta
-  "\x1b[36m", // cyan
-  "\x1b[37m", // white
-  "\x1b[95m", // bright magenta
-  "\x1b[94m", // bright blue
-  "\x1b[92m", // bright green
+  "\x1b[31m", 
+  "\x1b[32m",
+  "\x1b[33m",
+  "\x1b[34m", 
+  "\x1b[35m", 
+  "\x1b[36m", 
+  "\x1b[37m", 
+  "\x1b[95m", 
+  "\x1b[94m", 
+  "\x1b[92m",
 ];
 
 const RESET = "\x1b[0m";
@@ -74,6 +73,18 @@ function formatPrivateMessage(time, from, to, text, colorIndex, isSelf) {
   return line.length < max ? line.padStart(max) : line;
 }
 
+function printHelp() {
+  console.log("");
+  console.log("Available commands:");
+  console.log("  /nick <name>       Change your username");
+  console.log("  /join <room>       Switch/create room");
+  console.log("  /pm <user> <msg>   Private message");
+  console.log("  /users             List users in current room");
+  console.log("  /help              Show this menu");
+  console.log("  /quit              Disconnect");
+  console.log("");
+}
+
 function startClient(port = 8080, host = "localhost") {
   const url = `ws://${host}:${port}`;
   console.log(`Connecting to server at ${url} ...`);
@@ -88,9 +99,9 @@ function startClient(port = 8080, host = "localhost") {
   });
 
   let myName = "Anonymous";
-  let myColorIndex = 0; // will be set from join_ack
+  let myColorIndex = 0;
 
-  // --- typing state (me -> server) ---
+ 
   let iAmTyping = false;
   let typingTimeout = null;
 
@@ -112,10 +123,10 @@ function startClient(port = 8080, host = "localhost") {
     if (typingTimeout) clearTimeout(typingTimeout);
     typingTimeout = setTimeout(() => {
       sendStopTyping();
-    }, 1500); // 1.5s of inactivity
+    }, 1500); 
   }
 
-  // --- typing state (others -> display) ---
+ 
   const typingUsers = new Set();
   let typingLineVisible = false;
 
@@ -160,25 +171,25 @@ function startClient(port = 8080, host = "localhost") {
 
       console.log(
         c(
-          `Hi ${myName}! Type messages. Commands: /pm, /nick, /join, /quit`,
+          `Hi ${myName}! Type messages. Commands: /pm, /nick, /join, /users, /help, /quit`,
           "\x1b[37m"
         )
       );
       updatePrompt();
       rl.prompt();
 
-      // keypress listener (after username)
+    
       const onKeypress = (str, key) => {
         if (key && key.ctrl && key.name === "c") return;
 
-        // Enter -> line submitted, stop typing
+      
         if (key && key.name === "return") {
           sendStopTyping();
           if (typingTimeout) clearTimeout(typingTimeout);
           return;
         }
 
-        // Any other key
+       
         sendTyping();
         resetTypingTimeout();
       };
@@ -191,7 +202,26 @@ function startClient(port = 8080, host = "localhost") {
         sendStopTyping();
         if (typingTimeout) clearTimeout(typingTimeout);
 
-        // ----- /pm -----
+       
+        if (text === "/help") {
+          printHelp();
+          rl.prompt();
+          return;
+        }
+
+      
+        if (text === "/users") {
+         
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "users" }));
+          } else {
+            console.log(c("Not connected.", FG_RED));
+          }
+          rl.prompt();
+          return;
+        }
+
+      
         if (text.startsWith("/pm ")) {
           const parts = text.split(" ");
           if (parts.length < 3) {
@@ -218,7 +248,7 @@ function startClient(port = 8080, host = "localhost") {
           return;
         }
 
-        // ----- /nick -----
+     
         if (text.startsWith("/nick ")) {
           const newName = text.replace("/nick", "").trim();
 
@@ -228,19 +258,20 @@ function startClient(port = 8080, host = "localhost") {
             return;
           }
 
-          ws.send(
-            JSON.stringify({
-              type: "message",
-              text,
-            })
-          );
+         
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "nick", name: newName }));
+           
+            myName = newName;
+          } else {
+            console.log(c("Not connected.", FG_RED));
+          }
 
-          myName = newName;
           rl.prompt();
           return;
         }
 
-        // ----- /join -----
+       
         if (text.startsWith("/join ")) {
           const newRoom = text.replace("/join", "").trim();
 
@@ -250,15 +281,13 @@ function startClient(port = 8080, host = "localhost") {
             return;
           }
 
-          ws.send(
-            JSON.stringify({
-              type: "join_room",
-              room: newRoom,
-            })
-          );
-
-          currentRoom = newRoom;
-          updatePrompt();
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "join_room", room: newRoom }));
+            currentRoom = newRoom;
+            updatePrompt();
+          } else {
+            console.log(c("Not connected.", FG_RED));
+          }
           rl.prompt();
           return;
         }
@@ -275,7 +304,7 @@ function startClient(port = 8080, host = "localhost") {
           return;
         }
 
-        // clear typed line before printing own formatted message
+        
         try {
           readline.moveCursor(process.stdout, 0, -1);
           readline.clearLine(process.stdout, 0);
@@ -284,9 +313,7 @@ function startClient(port = 8080, host = "localhost") {
 
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "message", text }));
-          console.log(
-            formatIncomingMessage(Date.now(), myName, text, myColorIndex, true)
-          );
+          console.log(formatIncomingMessage(Date.now(), myName, text, myColorIndex, true));
         } else {
           console.log(c("Not connected.", FG_RED));
         }
@@ -331,45 +358,37 @@ function startClient(port = 8080, host = "localhost") {
       return;
     }
 
+    if (payload.type === "users") {
+      clearTypingLine();
+      console.log(c("--- Users in this room ---", FG_GRAY + DIM));
+      for (const u of payload.users) {
+        console.log(" ", u);
+      }
+      console.log(c("-------------------------", FG_GRAY + DIM));
+      renderTypingLine();
+      return;
+    }
+
     if (payload.type === "message") {
       const isMe = payload.user === myName;
-      const ci =
-        typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
+      const ci = typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
 
       clearTypingLine();
-      console.log(
-        formatIncomingMessage(
-          payload.time,
-          payload.user,
-          payload.text,
-          ci,
-          isMe
-        )
-      );
+      console.log(formatIncomingMessage(payload.time, payload.user, payload.text, ci, isMe));
       renderTypingLine();
       return;
     }
 
     if (payload.type === "private") {
-      const ci =
-        typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
+      const ci = typeof payload.colorIndex === "number" ? payload.colorIndex : 0;
 
       clearTypingLine();
-      console.log(
-        formatPrivateMessage(
-          payload.time,
-          payload.from,
-          payload.to,
-          payload.text,
-          ci,
-          false
-        )
-      );
+      console.log(formatPrivateMessage(payload.time, payload.from, payload.to, payload.text, ci, false));
       renderTypingLine();
       return;
     }
 
-    // typing events from others (room-scoped by server)
+    
     if (payload.type === "typing") {
       if (payload.user && payload.user !== myName) {
         typingUsers.add(payload.user);
