@@ -78,10 +78,9 @@ npx serve
 ```
 
 Then navigate to `http://localhost:3000`
-
 ## 📁 Project Structure
 
-
+```text
 BROADWAVE/
 ├── frontend/
 │   ├── index.html        # Main HTML file
@@ -96,12 +95,12 @@ BROADWAVE/
 ├── .gitignore            # Git ignore rules
 ├── client.js             # Terminal client (optional)
 ├── index.js              # Server entry point
-├── inspect-db.js         # Database inspection utility
 ├── package-lock.json     # Dependency lock file
 ├── package.json          # Project metadata
 ├── README.md             # This file
 ├── server.js             # WebSocket server logic
-├── show-env.js           # Environment checker
+└── show-env.js           # Environment checker
+```
 
 
 
