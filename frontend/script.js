@@ -1,5 +1,14 @@
 const WS_URL = "ws://localhost:9000";
-const ws = new WebSocket(WS_URL);
+let ws = null;
+
+const authScreen = document.getElementById("authScreen");
+const appScreen = document.getElementById("app");
+const loginTab = document.getElementById("loginTab");
+const registerTab = document.getElementById("registerTab");
+const usernameInput = document.getElementById("username");
+const passwordInput = document.getElementById("password");
+const authBtn = document.getElementById("authBtn");
+const errorEl = document.getElementById("error");
 
 const messagesEl = document.getElementById("messages");
 const usersEl = document.getElementById("users");
@@ -10,96 +19,99 @@ const sendBtn = document.getElementById("send");
 const roomEl = document.getElementById("room");
 const meEl = document.getElementById("me");
 
-let username = prompt("Enter your username:") || "Anonymous";
+let username = "";
 let currentRoom = "lobby";
 let typingTimer = null;
 let isTyping = false;
 let users = [];
+let isLogin = true;
 
-meEl.textContent = `You: ${username}`;
-roomEl.textContent = `Room: ${currentRoom}`;
+loginTab.onclick = () => {
+  isLogin = true;
+  loginTab.classList.add("active");
+  registerTab.classList.remove("active");
+  authBtn.textContent = "Login";
+  errorEl.textContent = "";
+};
 
+registerTab.onclick = () => {
+  isLogin = false;
+  registerTab.classList.add("active");
+  loginTab.classList.remove("active");
+  authBtn.textContent = "Register";
+  errorEl.textContent = "";
+};
 
-ws.onopen = () => {
-  console.log("Connected to WebSocket");
-  console.log("Sending username:", username);
-  
+function connectWebSocket() {
+  ws = new WebSocket(WS_URL);
 
-  ws.send(JSON.stringify({
-    type: "identify",
-    username: username
-  }));
-  
-  
-  setTimeout(() => {
-    ws.send(JSON.stringify({
-      type: "join",
-      room: currentRoom,
-      username: username  
-    }));
-    
-   
-    setTimeout(() => {
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === "auth_success") {
+      username = msg.username;
+      meEl.textContent = `You: ${username}`;
+      authScreen.style.display = "none";
+      appScreen.style.display = "flex";
+      inputEl.focus();
       requestUserList();
-    }, 100);
-  }, 100);
-};
-
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  console.log("Received message:", msg); 
-  
-  switch (msg.type) {
-    case "history":
-      displayHistory(msg.messages);
-      break;
-      
-    case "message":
-      console.log("Message from:", msg.username, "My username:", username);
-    
-      if (msg.username !== username && msg.user !== username) {
-        displayMessage(msg);
-      }
-      break;
-      
-    case "private":
+    } else if (msg.type === "auth_error") {
+      errorEl.textContent = msg.message;
+    } else if (msg.type === "history") {
+      messagesEl.innerHTML = "";
+      addSystem("--- Chat History ---");
+      msg.messages.forEach(m => displayMessage(m, true));
+      addSystem("--------------------");
+    } else if (msg.type === "message" && msg.username !== username) {
+      displayMessage(msg);
+    } else if (msg.type === "private") {
       displayPrivateMessage(msg);
-      break;
-      
-    case "typing":
-      if (msg.username !== username && msg.user !== username) {
-        showTyping(msg.username || msg.user);
-      }
-      break;
-      
-    case "stop_typing":
-      hideTyping();
-      break;
-      
-    case "users":
+    } else if (msg.type === "typing" && msg.username !== username) {
+      typingEl.textContent = `${msg.username} is typing...`;
+    } else if (msg.type === "stop_typing") {
+      typingEl.textContent = "";
+    } else if (msg.type === "users") {
       updateUsers(msg.users);
-      break;
-      
-    case "error":
+    } else if (msg.type === "error") {
       addSystem(`Error: ${msg.message}`);
-      break;
-      
-    case "info":
+    } else if (msg.type === "info") {
       addSystem(msg.message);
-      break;
+    } else if (msg.type === "system") {
+      addSystem(msg.text);
+    }
+  };
+
+  ws.onerror = () => {
+    errorEl.textContent = "Connection error";
+  };
+
+  ws.onclose = () => {
+    if (appScreen.style.display !== "none") {
+      addSystem("Disconnected");
+    }
+  };
+}
+
+authBtn.onclick = () => {
+  const user = usernameInput.value.trim();
+  const pass = passwordInput.value;
+
+  if (!user || !pass) {
+    errorEl.textContent = "Username and password required";
+    return;
   }
+
+  errorEl.textContent = "";
+  ws.send(JSON.stringify({
+    type: isLogin ? "login" : "register",
+    username: user,
+    password: pass
+  }));
 };
 
-ws.onerror = (error) => {
-  console.error("WebSocket error:", error);
-  addSystem("Connection error. Retrying...");
+passwordInput.onkeypress = (e) => {
+  if (e.key === "Enter") authBtn.click();
 };
-
-ws.onclose = () => {
-  console.log("Disconnected from WebSocket");
-  addSystem("Disconnected. Refresh to reconnect.");
-};
-
 
 function sendMessage() {
   const text = inputEl.value.trim();
@@ -108,17 +120,8 @@ function sendMessage() {
   if (text.startsWith("/")) {
     handleCommand(text);
   } else {
-    console.log("Sending message as:", username);
-    
-   
     displayOwnMessage(text);
-    
-   
-    ws.send(JSON.stringify({
-      type: "message",
-      username: username,
-      text: text
-    }));
+    ws.send(JSON.stringify({ type: "message", text: text }));
   }
 
   inputEl.value = "";
@@ -129,120 +132,42 @@ function handleCommand(cmd) {
   const parts = cmd.split(" ");
   const command = parts[0].toLowerCase();
 
-  switch(command) {
-    case "/join":
-      if (parts[1]) {
-        currentRoom = parts[1];
-        roomEl.textContent = `Room: ${currentRoom}`;
-        messagesEl.innerHTML = "";
-        
-        ws.send(JSON.stringify({
-          type: "join",
-          room: currentRoom,
-          username: username
-        }));
-        
-        setTimeout(() => requestUserList(), 100);
-      }
-      break;
-      
-    case "/nick":
-      if (parts[1]) {
-        const oldUsername = username;
-        username = parts[1];
-        meEl.textContent = `You: ${username}`;
-        
-        ws.send(JSON.stringify({
-          type: "nick",
-          username: username
-        }));
-        
-        addSystem(`You changed your name from ${oldUsername} to ${username}`);
-        
-    
-        ws.send(JSON.stringify({
-          type: "identify",
-          username: username
-        }));
-        
-        setTimeout(() => requestUserList(), 100);
-      }
-      break;
-      
-    case "/pm":
-      if (parts.length >= 3) {
-        const to = parts[1];
-        const message = parts.slice(2).join(" ");
-        
-        ws.send(JSON.stringify({
-          type: "private",
-          to: to,
-          text: message,
-          username: username  
-        }));
-        
-       
-        addSystem(`PM to ${to}: ${message}`);
-      }
-      break;
-      
-    case "/users":
-      requestUserList();
-      break;
-      
-    default:
-      addSystem(`Unknown command: ${command}`);
+  if (command === "/join" && parts[1]) {
+    currentRoom = parts[1];
+    roomEl.textContent = `Room: ${currentRoom}`;
+    messagesEl.innerHTML = "";
+    ws.send(JSON.stringify({ type: "join", room: currentRoom }));
+    setTimeout(() => requestUserList(), 100);
+  } else if (command === "/nick" && parts[1]) {
+    ws.send(JSON.stringify({ type: "nick", username: parts[1] }));
+    setTimeout(() => requestUserList(), 100);
+  } else if (command === "/pm" && parts.length >= 3) {
+    ws.send(JSON.stringify({ type: "private", to: parts[1], text: parts.slice(2).join(" ") }));
+    addSystem(`PM to ${parts[1]}: ${parts.slice(2).join(" ")}`);
+  } else if (command === "/users") {
+    requestUserList();
+  } else {
+    addSystem(`Unknown command: ${command}`);
   }
 }
-
-
-function displayHistory(messages) {
-  messagesEl.innerHTML = "";
-  addSystem("--- Chat History ---");
-  messages.forEach(msg => displayMessage(msg, true));
-  addSystem("--------------------");
-}
-
 
 function displayMessage(msg, isHistory = false) {
   const div = document.createElement("div");
   div.className = "msg";
-  
- 
-  let time = "";
-  if (msg.timestamp) {
-    const date = new Date(msg.timestamp);
-    time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  }
-  
-  const displayUsername = msg.username || msg.user || msg.from || "Anonymous";
-  const displayText = msg.text || msg.message || "";
-  const colorIndex = msg.colorIndex !== undefined ? msg.colorIndex : (msg.color || 0);
-  const color = getUserColor(colorIndex);
-  
-  console.log("Displaying message - Username:", displayUsername, "Text:", displayText);
-  
-  div.innerHTML = `<span class="time">${time}</span> <span class="username" style="color:${color}">${escapeHtml(displayUsername)}</span>: ${escapeHtml(displayText)}`;
-  
+  const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : "";
+  const color = getUserColor(msg.colorIndex || 0);
+  div.innerHTML = `<span class="time">${time}</span> <span class="username" style="color:${color}">${escapeHtml(msg.username)}</span>: ${escapeHtml(msg.text)}`;
   messagesEl.appendChild(div);
-  
-  if (!isHistory) {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
+  if (!isHistory) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-
 
 function displayOwnMessage(text) {
   const div = document.createElement("div");
   div.className = "msg self";
-  
   const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  const myUser = users.find(u => (u.username || u) === username);
-  const colorIndex = myUser && typeof myUser === 'object' ? myUser.colorIndex : 0;
-  const color = getUserColor(colorIndex);
-  
+  const myUser = users.find(u => u.username === username);
+  const color = getUserColor(myUser ? myUser.colorIndex : 0);
   div.innerHTML = `<span class="time">${time}</span> <span class="username" style="color:${color}">${escapeHtml(username)}</span>: ${escapeHtml(text)}`;
-  
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -250,18 +175,12 @@ function displayOwnMessage(text) {
 function displayPrivateMessage(msg) {
   const div = document.createElement("div");
   div.className = "msg pm";
-  
   const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  const colorIndex = msg.colorIndex !== undefined ? msg.colorIndex : (msg.color || 0);
-  const color = getUserColor(colorIndex);
-  const fromUser = msg.from || msg.username || msg.user || "Unknown";
-  
-  div.innerHTML = `<span class="time">${time}</span> <span class="username" style="color:${color}">${escapeHtml(fromUser)}</span> → You (private): ${escapeHtml(msg.text)}`;
-  
+  const color = getUserColor(msg.colorIndex || 0);
+  div.innerHTML = `<span class="time">${time}</span> <span class="username" style="color:${color}">${escapeHtml(msg.from)}</span> → You (private): ${escapeHtml(msg.text)}`;
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-
 
 function addSystem(text) {
   const div = document.createElement("div");
@@ -271,102 +190,54 @@ function addSystem(text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-
 function updateUsers(userList) {
-  console.log("Updating users list:", userList);
   users = userList;
   usersEl.innerHTML = "";
   userCountEl.textContent = userList.length;
-  
-
   document.querySelectorAll('style[data-user-style]').forEach(style => style.remove());
-  
+
   userList.forEach((user, index) => {
     const li = document.createElement("li");
-    
+    const isYou = user.username === username;
+    const color = getUserColor(user.colorIndex);
 
-    let userName, colorIndex;
-    if (typeof user === 'object') {
-      userName = user.username || user.user || user.name || "Anonymous";
-      colorIndex = user.colorIndex !== undefined ? user.colorIndex : (user.color || 0);
-    } else {
-      userName = user;
-      colorIndex = 0;
-    }
-    
-    const isYou = userName === username;
-    const color = getUserColor(colorIndex);
-    
     li.style.color = color;
-    li.textContent = `${userName}${isYou ? ' (you)' : ''}`;
-    
-    if (isYou) {
-      li.classList.add("you");
-    }
-    
-   
+    li.textContent = `${user.username}${isYou ? ' (you)' : ''}`;
+    if (isYou) li.classList.add("you");
+
     const style = document.createElement('style');
     style.setAttribute('data-user-style', '');
     style.textContent = `#users li:nth-child(${index + 1})::before { background: ${color}; }`;
     document.head.appendChild(style);
-    
+
     usersEl.appendChild(li);
   });
-}
-
-function showTyping(user) {
-  typingEl.textContent = `${user} is typing...`;
-}
-
-function hideTyping() {
-  typingEl.textContent = "";
 }
 
 function handleTyping() {
   if (!isTyping) {
     isTyping = true;
-    ws.send(JSON.stringify({ 
-      type: "typing",
-      username: username  
-    }));
+    ws.send(JSON.stringify({ type: "typing" }));
   }
-  
   clearTimeout(typingTimer);
-  typingTimer = setTimeout(() => {
-    stopTyping();
-  }, 2000);
+  typingTimer = setTimeout(() => stopTyping(), 2000);
 }
 
 function stopTyping() {
   if (isTyping) {
     isTyping = false;
-    ws.send(JSON.stringify({ 
-      type: "stop_typing",
-      username: username 
-    }));
+    ws.send(JSON.stringify({ type: "stop_typing" }));
   }
-  clearTimeout(typingTimer);
 }
-
 
 function requestUserList() {
-  ws.send(JSON.stringify({ 
-    type: "users",
-    username: username  
-  }));
+  ws.send(JSON.stringify({ type: "users" }));
 }
-
 
 function getUserColor(colorIndex) {
-  const colors = [
-    "#ef4444", "#f97316", "#f59e0b", "#84cc16", 
-    "#10b981", "#14b8a6", "#06b6d4", "#3b82f6", 
-    "#6366f1", "#8b5cf6", "#a855f7", "#d946ef",
-    "#ec4899", "#f43f5e"
-  ];
+  const colors = ["#ef4444", "#f97316", "#f59e0b", "#84cc16", "#10b981", "#14b8a6", "#06b6d4", "#3b82f6", "#6366f1", "#8b5cf6"];
   return colors[colorIndex % colors.length];
 }
-
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -374,16 +245,10 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-
 sendBtn.onclick = sendMessage;
-
 inputEl.onkeydown = (e) => {
-  if (e.key === "Enter") {
-    sendMessage();
-  } else {
-    handleTyping();
-  }
+  if (e.key === "Enter") sendMessage();
+  else handleTyping();
 };
 
-
-inputEl.focus();
+connectWebSocket();

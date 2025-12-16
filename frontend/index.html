@@ -7,7 +7,21 @@
 </head>
 <body>
 
-<div id="app">
+<div id="authScreen">
+  <div class="auth-box">
+    <h1>🌊 BroadWave</h1>
+    <div class="tabs">
+      <button class="tab active" id="loginTab">Login</button>
+      <button class="tab" id="registerTab">Register</button>
+    </div>
+    <input type="text" id="username" placeholder="Username" maxlength="20" />
+    <input type="password" id="password" placeholder="Password" />
+    <button id="authBtn">Login</button>
+    <div class="error" id="error"></div>
+  </div>
+</div>
+
+<div id="app" style="display: none;">
   <header>
     <div>
       <h2>BroadWave</h2>
@@ -20,7 +34,6 @@
     <aside>
       <h4>Users (<span id="userCount">0</span>)</h4>
       <ul id="users"></ul>
-
       <pre class="help">Commands:
 /join &lt;room&gt;
 /nick &lt;name&gt;
@@ -31,7 +44,6 @@
     <main>
       <div id="messages"></div>
       <div id="typing"></div>
-
       <div class="input">
         <input id="input" placeholder="Type message or /command" autocomplete="off" />
         <button id="send">Send</button>
