@@ -84,20 +84,26 @@ Then navigate to `http://localhost:3000`
 
 BROADWAVE/
 ├── frontend/
-│   ├── index.html      # Main HTML file
-│   ├── script.js       # Frontend JavaScript
-│   └── style.css       # Styling
-├── node_modules/       # Dependencies
-├── .env                # Environment variables
-├── .gitignore          # Git ignore rules
-├── client.js           # Terminal client (optional)
-├── index.js            # Server entry point
-├── inspect-db.js       # Database inspection utility
-├── package-lock.json   # Dependency lock file
-├── package.json        # Project metadata
-├── README.md           # This file
-├── server.js           # WebSocket server logic
-├── show-env.js         # Environment checker
+│   ├── index.html        # Main HTML file
+│   ├── script.js         # Frontend JavaScript
+│   └── style.css         # Styling
+├── img/
+│   ├── img1.png
+│   ├── img2.png
+│   └── img3.png
+├── node_modules/         # Dependencies
+├── .env                  # Environment variables
+├── .gitignore            # Git ignore rules
+├── client.js             # Terminal client (optional)
+├── index.js              # Server entry point
+├── inspect-db.js         # Database inspection utility
+├── package-lock.json     # Dependency lock file
+├── package.json          # Project metadata
+├── README.md             # This file
+├── server.js             # WebSocket server logic
+├── show-env.js           # Environment checker
+
+
 
 
 
