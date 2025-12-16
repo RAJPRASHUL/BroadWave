@@ -7,7 +7,7 @@ const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/broadwave"
 const PORT = Number(process.env.PORT) || 8080;
 const MAX_HISTORY = Number(process.env.MAX_HISTORY) || 200;
 const COLOR_COUNT = 10;
-
+const MAX_NICK_CHANGES = 3; 
 
 let mongoClient = null;
 let messagesColl = null;
@@ -35,9 +35,9 @@ async function getRoomHistory(room, limit = MAX_HISTORY) {
   return rows.reverse().map((r) => ({
     type: "message",
     room: r.room,
-    user: r.user,
+    username: r.username, 
     text: r.text,
-    time: r.time,
+    timestamp: r.time,    
     colorIndex: r.colorIndex,
   }));
 }
@@ -47,7 +47,7 @@ async function saveMessageToDb(msg) {
   try {
     await messagesColl.insertOne({
       room: msg.room,
-      user: msg.user,
+      username: msg.username, 
       text: msg.text,
       time: msg.time,
       colorIndex: msg.colorIndex,
@@ -73,9 +73,7 @@ function isNameTaken(name, clients) {
   return false;
 }
 
-
 async function startServer(port = PORT) {
-
   try {
     await connectMongo(MONGO_URI);
     console.log("Connected to MongoDB");
@@ -86,7 +84,7 @@ async function startServer(port = PORT) {
 
   const wss = new WebSocket.Server({ port });
   const clients = new Set();
-  const rooms = new Map(); 
+  const rooms = new Map();
 
   function ensureRoom(room) {
     if (!rooms.has(room)) rooms.set(room, new Set());
@@ -118,16 +116,18 @@ async function startServer(port = PORT) {
     for (const [, set] of rooms) if (set.size > 0) count++;
     return count;
   }
+
   function logStats() {
     console.log(`Stats: clients=${clients.size}, rooms=${getActiveRoomCount()}`);
   }
 
-  console.log(` WebSocket server running at ws://localhost:${port}`);
+  console.log(`WebSocket server running at ws://localhost:${port}`);
 
   wss.on("connection", (ws) => {
     ws.userName = "Anonymous";
     ws.colorIndex = assignColor();
     ws.room = "lobby";
+    ws.nickChangeCount = 0; 
 
     clients.add(ws);
     ensureRoom("lobby").add(ws);
@@ -141,116 +141,178 @@ async function startServer(port = PORT) {
         return;
       }
 
-     
+    
+      if (payload.type === "identify") {
+      
+        if (ws.userName === "Anonymous") {
+          const newName = (payload.username || "Anonymous").toString().trim();
+          ws.userName = newName;
+          console.log(`Client identified as: ${ws.userName}`);
+        } else {
+          console.log(`Client tried to re-identify, but already set as: ${ws.userName}`);
+        }
+        return;
+      }
+
+   
       if (payload.type === "join") {
-        ws.userName = (payload.user || "Anonymous").toString().trim();
-
-        try { ws.send(JSON.stringify({ type: "join_ack", colorIndex: ws.colorIndex })); } catch {}
-        try {
-          const history = await getRoomHistory(ws.room);
-          ws.send(JSON.stringify({ type: "history", messages: history }));
-        } catch {}
-
-        broadcast(ws.room, JSON.stringify({ type: "system", text: `${ws.userName} joined room "${ws.room}".` }), ws);
-        return;
-      }
-
-
-      if (payload.type === "nick") {
-        const newName = (payload.name || "").toString().trim();
-        if (!newName) {
-          try { ws.send(JSON.stringify({ type: "system", text: "Usage: /nick NewName" })); } catch {}
-          return;
-        }
-        if (isNameTaken(newName, clients)) {
-          try { ws.send(JSON.stringify({ type: "system", text: `Nickname "${newName}" is already taken.` })); } catch {}
-          return;
-        }
-        const old = ws.userName;
-        ws.userName = newName;
-        broadcast(ws.room, JSON.stringify({ type: "system", text: `${old} changed name to ${newName}` }));
-        return;
-      }
-
-      if (payload.type === "join_room") {
-        const newRoomRaw = payload.room || "";
+        const newRoomRaw = payload.room || "lobby";
         const newRoom = newRoomRaw.toString().trim();
-        if (!newRoom) {
-          try { ws.send(JSON.stringify({ type: "system", text: "Usage: /join roomName" })); } catch {}
-          return;
-        }
+
+  
 
         const oldRoom = ws.room;
         const oldSet = rooms.get(oldRoom);
         if (oldSet) oldSet.delete(ws);
 
-        broadcast(oldRoom, JSON.stringify({ type: "system", text: `${ws.userName} left room "${oldRoom}".` }), ws);
+        if (oldRoom !== newRoom) {
+          broadcast(oldRoom, JSON.stringify({ 
+            type: "system", 
+            text: `${ws.userName} left room "${oldRoom}".` 
+          }), ws);
+        }
 
         ws.room = newRoom;
         ensureRoom(newRoom).add(ws);
 
+       
+        try {
+          ws.send(JSON.stringify({ 
+            type: "join_ack", 
+            colorIndex: ws.colorIndex,
+            username: ws.userName
+          }));
+        } catch {}
+
+    
         try {
           const history = await getRoomHistory(newRoom);
           ws.send(JSON.stringify({ type: "history", messages: history }));
         } catch {}
 
-        broadcast(newRoom, JSON.stringify({ type: "system", text: `${ws.userName} joined room "${newRoom}".` }), ws);
+     
+        broadcast(newRoom, JSON.stringify({ 
+          type: "system", 
+          text: `${ws.userName} joined room "${newRoom}".` 
+        }), ws);
+
         logStats();
         return;
       }
 
-  
-      if (payload.type === "users") {
-        const list = [];
-        const set = rooms.get(ws.room);
-        if (set) for (const c of set) if (c.userName) list.push(c.userName);
-        try { ws.send(JSON.stringify({ type: "users", users: list })); } catch {}
+      if (payload.type === "nick") {
+        const newName = (payload.username || payload.name || "").toString().trim();
+        
+       
+        if (!newName) {
+          try { 
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Usage: /nick <newname>" 
+            })); 
+          } catch {}
+          return;
+        }
+        
+ 
+        if (ws.nickChangeCount >= MAX_NICK_CHANGES) {
+          try { 
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: `You have reached the maximum limit of ${MAX_NICK_CHANGES} nickname changes.` 
+            })); 
+          } catch {}
+          return;
+        }
+        
+      
+        if (isNameTaken(newName, clients)) {
+          try { 
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: `Nickname "${newName}" is already taken.` 
+            })); 
+          } catch {}
+          return;
+        }
+        
+      
+        const old = ws.userName;
+        ws.userName = newName;
+        ws.nickChangeCount++;
+        
+        const changesLeft = MAX_NICK_CHANGES - ws.nickChangeCount;
+        
+   
+        try { 
+          ws.send(JSON.stringify({ 
+            type: "info", 
+            message: `You changed your name to "${newName}". ${changesLeft} change${changesLeft !== 1 ? 's' : ''} remaining.` 
+          })); 
+        } catch {}
+        
+       
+        broadcast(ws.room, JSON.stringify({ 
+          type: "system", 
+          text: `${old} changed name to ${newName}` 
+        }));
         return;
       }
 
-      
+    
+      if (payload.type === "users") {
+        const list = [];
+        const set = rooms.get(ws.room);
+        if (set) {
+          for (const c of set) {
+            if (c.userName) {
+              list.push({
+                username: c.userName,
+                colorIndex: c.colorIndex
+              });
+            }
+          }
+        }
+        try { 
+          ws.send(JSON.stringify({ type: "users", users: list })); 
+        } catch {}
+        return;
+      }
+
+
       if (payload.type === "message") {
         const text = (payload.text || "").toString().trim();
         if (!text) return;
 
-      
-        if (text.startsWith("/nick ")) {
-          const newName = text.replace("/nick", "").trim();
-          if (!newName) {
-            try { ws.send(JSON.stringify({ type: "system", text: "Usage: /nick NewName" })); } catch {}
-            return;
-          }
-          if (isNameTaken(newName, clients)) {
-            try { ws.send(JSON.stringify({ type: "system", text: `Nickname "${newName}" is already taken.` })); } catch {}
-            return;
-          }
-          const old = ws.userName;
-          ws.userName = newName;
-          broadcast(ws.room, JSON.stringify({ type: "system", text: `${old} changed name to ${newName}` }));
-          return;
-        }
 
-        
+
         const msg = {
           type: "message",
           room: ws.room,
-          user: ws.userName,
+          username: ws.userName,  
           text,
-          time: Date.now(),
+          timestamp: Date.now(), 
           colorIndex: ws.colorIndex,
         };
 
-        
+     
         saveMessageToDb(msg).catch((e) => console.error("save err:", e && e.message));
+        
+     
         broadcast(ws.room, JSON.stringify(msg), ws);
         return;
       }
 
-      
+     
       if (payload.type === "private") {
         const target = findClientByName(payload.to, clients);
         if (!target) {
-          try { ws.send(JSON.stringify({ type: "system", text: `User "${payload.to}" not online` })); } catch {}
+          try { 
+            ws.send(JSON.stringify({ 
+              type: "system", 
+              text: `User "${payload.to}" not online` 
+            })); 
+          } catch {}
           return;
         }
 
@@ -259,7 +321,7 @@ async function startServer(port = PORT) {
           from: ws.userName,
           to: target.userName,
           text: (payload.text || "").toString(),
-          time: Date.now(),
+          timestamp: Date.now(),
           colorIndex: ws.colorIndex,
         };
 
@@ -267,9 +329,12 @@ async function startServer(port = PORT) {
         return;
       }
 
-      
+    
       if (payload.type === "typing" || payload.type === "stop_typing") {
-        broadcast(ws.room, JSON.stringify({ type: payload.type, user: ws.userName }), ws);
+        broadcast(ws.room, JSON.stringify({ 
+          type: payload.type, 
+          username: ws.userName  
+        }), ws);
         return;
       }
     });
@@ -278,6 +343,10 @@ async function startServer(port = PORT) {
       clients.delete(ws);
       const r = rooms.get(ws.room);
       if (r) r.delete(ws);
+      broadcast(ws.room, JSON.stringify({ 
+        type: "system", 
+        text: `${ws.userName} left.` 
+      }));
       logStats();
     });
 
@@ -288,7 +357,6 @@ async function startServer(port = PORT) {
     console.error("Server error:", err && err.message);
   });
 }
-
 
 module.exports = { startServer };
 if (require.main === module) {

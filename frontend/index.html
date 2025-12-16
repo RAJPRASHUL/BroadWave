@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>BroadWave</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <div>
+      <h2>BroadWave</h2>
+      <small id="me"></small>
+    </div>
+    <span id="room">Room: lobby</span>
+  </header>
+
+  <div id="layout">
+    <aside>
+      <h4>Users (<span id="userCount">0</span>)</h4>
+      <ul id="users"></ul>
+
+      <pre class="help">Commands:
+/join &lt;room&gt;
+/nick &lt;name&gt;
+/pm &lt;user&gt; &lt;msg&gt;
+/users</pre>
+    </aside>
+
+    <main>
+      <div id="messages"></div>
+      <div id="typing"></div>
+
+      <div class="input">
+        <input id="input" placeholder="Type message or /command" autocomplete="off" />
+        <button id="send">Send</button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
